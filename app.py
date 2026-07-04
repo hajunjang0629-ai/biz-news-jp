@@ -20,10 +20,12 @@ from services.translator import translate_articles
 BASE_DIR = Path(__file__).resolve().parent
 SITE_NAME = "BizNews JP"
 SITE_DESCRIPTION = "世界中のビジネスニュースから、重要で興味深い記事だけを日本語でお届けします。"
-ARTICLE_BODY_TIMEOUT_SECONDS = 22
+ARTICLE_BODY_TIMEOUT_SECONDS = 18
+ARTICLE_LOOKUP_TIMEOUT_SECONDS = 8
 
 _news_cache: list[dict] | None = None
 _articles_by_id: dict[str, dict] = {}
+_news_cache_lock = threading.Lock()
 
 
 def _warm_news_cache() -> None:
@@ -53,6 +55,20 @@ def get_base_url(request: Request) -> str:
     if configured:
         return configured
     return str(request.base_url).rstrip("/")
+
+
+def article_preview_payload(article: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": article["id"],
+        "title_ja": article["title_ja"],
+        "title_original": article["title_original"],
+        "summary_ja": article["summary_ja"],
+        "summary_original": article["summary_original"],
+        "source": article["source"],
+        "url": article["url"],
+        "published_at": article["published_at"],
+        "image_url": article.get("image_url"),
+    }
 
 
 def build_page_context(
@@ -89,16 +105,23 @@ def build_page_context(
         "og_url": og_url,
         "og_image": og_image,
         "open_article_id": open_article_id,
+        "open_article": article_preview_payload(share_article) if share_article else None,
+        "article_preview": article_preview_payload,
     }
 
 
 def get_translated_news() -> list[dict]:
     global _news_cache, _articles_by_id
-    articles = fetch_interesting_business_news()
-    translated = translate_articles([article.to_dict() for article in articles])
-    _news_cache = translated
-    _articles_by_id = {article["id"]: article for article in translated}
-    return translated
+
+    with _news_cache_lock:
+        if _news_cache is not None:
+            return _news_cache
+
+        articles = fetch_interesting_business_news()
+        translated = translate_articles([article.to_dict() for article in articles])
+        _news_cache = translated
+        _articles_by_id = {article["id"]: article for article in translated}
+        return translated
 
 
 def get_cached_news() -> list[dict]:
@@ -110,13 +133,30 @@ def get_article(article_id: str) -> dict:
     if article:
         return article
 
-    if not _articles_by_id:
+    if _news_cache is None:
         get_translated_news()
         article = _articles_by_id.get(article_id)
         if article:
             return article
 
     raise HTTPException(status_code=404, detail="記事が見つかりません")
+
+
+async def resolve_article(article_id: str) -> dict | None:
+    article = _articles_by_id.get(article_id)
+    if article:
+        return article
+
+    if _news_cache is None:
+        try:
+            await asyncio.wait_for(
+                run_in_threadpool(get_translated_news),
+                timeout=ARTICLE_LOOKUP_TIMEOUT_SECONDS,
+            )
+        except (asyncio.TimeoutError, Exception):
+            return None
+
+    return _articles_by_id.get(article_id)
 
 
 @app.get("/health")
@@ -133,9 +173,10 @@ async def index(request: Request) -> HTMLResponse:
 
 @app.get("/article/{article_id}", response_class=HTMLResponse)
 async def article_page(request: Request, article_id: str) -> HTMLResponse:
-    if not _articles_by_id:
-        get_translated_news()
-    share_article = get_article(article_id)
+    share_article = await resolve_article(article_id)
+    if not share_article:
+        raise HTTPException(status_code=404, detail="記事が見つかりません")
+
     articles = get_cached_news()
     context = build_page_context(
         request,
@@ -153,8 +194,13 @@ async def api_news() -> JSONResponse:
 
 
 @app.get("/api/articles/{article_id}/body")
-async def article_body(article_id: str) -> JSONResponse:
-    article = get_article(article_id)
+async def article_body(article_id: str, quick: bool = False) -> JSONResponse:
+    article = await resolve_article(article_id)
+    if not article:
+        raise HTTPException(status_code=404, detail="記事が見つかりません")
+
+    if quick:
+        return JSONResponse(build_fallback_article_payload(article))
 
     try:
         payload = await asyncio.wait_for(

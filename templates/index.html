@@ -84,6 +84,7 @@
       <article
         class="news-card clickable-card"
         data-article-id="{{ article.id }}"
+        data-article='{{ article_preview(article) | tojson }}'
         data-tags="{{ article.interest_tags_ja | join(' ') }} {{ article.interest_tags | join(' ') }}"
         tabindex="0"
         role="button"
@@ -193,7 +194,8 @@
   <script>
     window.APP_CONFIG = {
       baseUrl: {{ base_url | tojson }},
-      openArticleId: {{ open_article_id | tojson }}
+      openArticleId: {{ open_article_id | tojson }},
+      openArticle: {{ open_article | tojson }}
     };
   </script>
   <script src="/static/app.js"></script>

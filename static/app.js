@@ -5,7 +5,7 @@ const shareCopyBtn = document.getElementById("share-copy-btn");
 const shareXBtn = document.getElementById("share-x-btn");
 const shareLineBtn = document.getElementById("share-line-btn");
 const shareUrlEl = document.getElementById("share-url");
-const appConfig = window.APP_CONFIG || { baseUrl: window.location.origin, openArticleId: null };
+const appConfig = window.APP_CONFIG || { baseUrl: window.location.origin, openArticleId: null, openArticle: null };
 
 let currentArticleId = null;
 let currentShareTitle = "";
@@ -23,6 +23,48 @@ const modalDate = document.getElementById("modal-date");
 const modalTitleOriginal = document.getElementById("modal-title-original");
 const modalBodyOriginal = document.getElementById("modal-body-original");
 const modalSourceLink = document.getElementById("modal-source-link");
+
+function formatPublishedDate(value) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+function parseArticlePreview(raw) {
+  if (!raw) return null;
+  if (typeof raw === "object") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function buildPreviewPayload(preview) {
+  const summaryJa = preview.summary_ja || "";
+  const summaryOriginal = preview.summary_original || "";
+  return {
+    id: preview.id,
+    title_ja: preview.title_ja || "",
+    title_original: preview.title_original || "",
+    summary_ja: summaryJa,
+    body_ja: summaryJa,
+    body_original: summaryOriginal,
+    bullet_summary: [],
+    source: preview.source || "",
+    url: preview.url || "#",
+    published_at: preview.published_at || "",
+    image_url: preview.image_url || null,
+    partial: true,
+  };
+}
+
+function showPartialNotice() {
+  if (modalBody.querySelector(".partial-notice")) return;
+  modalBody.insertAdjacentHTML(
+    "afterbegin",
+    '<p class="partial-notice fade-line" style="--delay:0ms">通信状況により要約のみ表示しています。原文サイトで全文をご確認ください。</p>'
+  );
+}
 
 function getSiteUrl() {
   return appConfig.baseUrl || window.location.origin;
@@ -198,13 +240,14 @@ function closeModal({ updateUrl = true } = {}) {
   }
 }
 
-async function fetchArticleBody(articleId) {
-  const url = `/api/articles/${encodeURIComponent(articleId)}/body`;
+async function fetchArticleBody(articleId, { quick = false } = {}) {
+  const query = quick ? "?quick=1" : "";
+  const url = `/api/articles/${encodeURIComponent(articleId)}/body${query}`;
   let lastError = null;
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
+    const timeoutId = setTimeout(() => controller.abort(), quick ? 15000 : 45000);
 
     try {
       const response = await fetch(url, {
@@ -231,61 +274,78 @@ async function fetchArticleBody(articleId) {
   throw lastError;
 }
 
-async function openArticle(articleId, { updateUrl = true } = {}) {
+function renderArticleModal(data, articleId, { updateUrl = true, showPartial = false } = {}) {
+  let lineIndex = 0;
+
+  setFadeElement(modalSource, lineIndex);
+  setFadeElement(modalDate, lineIndex);
+  modalSource.textContent = data.source || "";
+  modalDate.textContent = formatPublishedDate(data.published_at);
+  lineIndex += 1;
+
+  if (data.image_url) {
+    modalImage.src = data.image_url;
+    modalImageWrap.hidden = false;
+    setFadeElement(modalImageWrap, lineIndex);
+    lineIndex += 1;
+  } else {
+    modalImage.removeAttribute("src");
+    modalImageWrap.hidden = true;
+  }
+
+  modalTitle.textContent = data.title_ja || "";
+  currentShareTitle = data.title_ja || "";
+  setFadeElement(modalTitle, lineIndex);
+  lineIndex += 1;
+
+  lineIndex = renderBullets(data.bullet_summary, lineIndex);
+
+  const bodyText = data.body_ja || data.summary_ja || "";
+  modalBody.innerHTML = formatBody(bodyText, lineIndex);
+  lineIndex += splitIntoLines(bodyText).length;
+
+  modalTitleOriginal.textContent = data.title_original || "";
+  modalBodyOriginal.innerHTML = formatBody(data.body_original || "", lineIndex);
+  modalSourceLink.href = data.url || "#";
+  updateShareLinks(articleId, data.title_ja || "");
+
+  if (showPartial || data.partial) {
+    showPartialNotice();
+  }
+
+  if (updateUrl) {
+    updateArticleUrl(articleId);
+  }
+
+  modalLoading.hidden = true;
+  modalContent.hidden = false;
+}
+
+async function openArticle(articleId, { updateUrl = true, preview = null } = {}) {
   openModal();
   modalLoading.hidden = false;
   modalContent.hidden = true;
   currentArticleId = articleId;
 
+  const previewData = parseArticlePreview(preview) || parseArticlePreview(appConfig.openArticle);
+  const hasPreview = Boolean(previewData && previewData.id === articleId);
+
+  if (hasPreview) {
+    renderArticleModal(buildPreviewPayload(previewData), articleId, { updateUrl, showPartial: true });
+  }
+
   try {
     const data = await fetchArticleBody(articleId);
-    let lineIndex = 0;
-
-    setFadeElement(modalSource, lineIndex);
-    setFadeElement(modalDate, lineIndex);
-    modalSource.textContent = data.source;
-    modalDate.textContent = data.published_at.slice(0, 10);
-    lineIndex += 1;
-
-    if (data.image_url) {
-      modalImage.src = data.image_url;
-      modalImageWrap.hidden = false;
-      setFadeElement(modalImageWrap, lineIndex);
-      lineIndex += 1;
-    } else {
-      modalImage.removeAttribute("src");
-      modalImageWrap.hidden = true;
-    }
-
-    modalTitle.textContent = data.title_ja;
-    currentShareTitle = data.title_ja;
-    setFadeElement(modalTitle, lineIndex);
-    lineIndex += 1;
-
-    lineIndex = renderBullets(data.bullet_summary, lineIndex);
-
-    modalBody.innerHTML = formatBody(data.body_ja || data.summary_ja, lineIndex);
-    lineIndex += splitIntoLines(data.body_ja || data.summary_ja).length;
-
-    modalTitleOriginal.textContent = data.title_original;
-    modalBodyOriginal.innerHTML = formatBody(data.body_original || "", lineIndex);
-    modalSourceLink.href = data.url;
-    updateShareLinks(articleId, data.title_ja);
-
-    if (data.partial) {
-      modalBody.insertAdjacentHTML(
-        "afterbegin",
-        '<p class="partial-notice fade-line" style="--delay:0ms">通信状況により要約のみ表示しています。原文サイトで全文をご確認ください。</p>'
-      );
-    }
-
-    if (updateUrl) {
-      updateArticleUrl(articleId);
-    }
-
-    modalLoading.hidden = true;
-    modalContent.hidden = false;
+    renderArticleModal(data, articleId, {
+      updateUrl: !hasPreview && updateUrl,
+      showPartial: Boolean(data.partial),
+    });
   } catch (error) {
+    if (hasPreview) {
+      showPartialNotice();
+      return;
+    }
+
     closeModal({ updateUrl: false });
     alert("記事の取得に失敗しました。もう一度お試しください。");
   }
@@ -294,13 +354,13 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
 document.querySelectorAll(".clickable-card[data-article-id]").forEach((element) => {
   element.addEventListener("click", (event) => {
     if (event.defaultPrevented) return;
-    openArticle(element.dataset.articleId);
+    openArticle(element.dataset.articleId, { preview: element.dataset.article });
   });
 
   element.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      openArticle(element.dataset.articleId);
+      openArticle(element.dataset.articleId, { preview: element.dataset.article });
     }
   });
 });
@@ -318,7 +378,11 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("popstate", (event) => {
   const articleId = event.state?.articleId;
   if (articleId) {
-    openArticle(articleId, { updateUrl: false });
+    const card = document.querySelector(`.clickable-card[data-article-id="${articleId}"]`);
+    openArticle(articleId, {
+      updateUrl: false,
+      preview: card?.dataset.article || null,
+    });
     return;
   }
 
@@ -348,7 +412,10 @@ shareCopyBtn?.addEventListener("click", async () => {
 });
 
 if (appConfig.openArticleId) {
-  openArticle(appConfig.openArticleId, { updateUrl: false });
+  openArticle(appConfig.openArticleId, {
+    updateUrl: false,
+    preview: appConfig.openArticle,
+  });
 }
 
 async function waitForNews() {
