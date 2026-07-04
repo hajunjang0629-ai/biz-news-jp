@@ -10,8 +10,8 @@ const appConfig = window.APP_CONFIG || { baseUrl: window.location.origin, openAr
 const IS_MOBILE = window.matchMedia("(max-width: 768px), (hover: none) and (pointer: coarse)").matches;
 const USE_ANIMATIONS = !IS_MOBILE && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const LINE_DELAY_MS = USE_ANIMATIONS ? 65 : 0;
-const FETCH_TIMEOUT_MS = IS_MOBILE ? 12000 : 28000;
-const FETCH_RETRIES = IS_MOBILE ? 1 : 2;
+const FETCH_TIMEOUT_MS = IS_MOBILE ? 29000 : 32000;
+const FETCH_RETRIES = IS_MOBILE ? 2 : 2;
 const LOADING_MAX_MS = IS_MOBILE ? 1200 : 2500;
 
 let currentArticleId = null;
@@ -125,6 +125,30 @@ function showPartialNotice() {
     "afterbegin",
     '<p class="partial-notice fade-line" style="--delay:0ms">通信状況により要約のみ表示しています。原文サイトで全文をご確認ください。</p>'
   );
+}
+
+function clearPartialNotice() {
+  modalBody.querySelector(".partial-notice")?.remove();
+}
+
+function showFullBodyLoading() {
+  if (document.getElementById("full-body-loading")) return;
+  modalBody.insertAdjacentHTML(
+    "beforeend",
+    '<p id="full-body-loading" class="full-body-loading">全文を翻訳しています...</p>'
+  );
+}
+
+function hideFullBodyLoading() {
+  document.getElementById("full-body-loading")?.remove();
+}
+
+function shouldUpgradeBody(data, preview) {
+  const body = (data?.body_ja || "").trim();
+  const summary = (data?.summary_ja || preview?.summary_ja || "").trim();
+  if (!body) return false;
+  if (body.length > summary.length + 60) return true;
+  return !data?.partial;
 }
 
 function getSiteUrl() {
@@ -318,7 +342,7 @@ function closeModal({ updateUrl = true } = {}) {
 async function fetchArticleBody(articleId, { quick = false } = {}) {
   const query = quick ? "?quick=1" : "";
   const url = `/api/articles/${encodeURIComponent(articleId)}/body${query}`;
-  const timeoutMs = quick && IS_MOBILE ? 8000 : FETCH_TIMEOUT_MS;
+  const timeoutMs = quick ? 8000 : FETCH_TIMEOUT_MS;
   let lastError = null;
 
   for (let attempt = 0; attempt < FETCH_RETRIES; attempt += 1) {
@@ -385,7 +409,8 @@ function renderArticleModal(data, articleId, { updateUrl = true, showPartial = f
     modalSourceLink.href = data.url || "#";
     updateShareLinks(articleId, data.title_ja || "");
 
-    if (showPartial || data.partial) {
+    clearPartialNotice();
+    if (showPartial || (data.partial && !shouldUpgradeBody(data))) {
       showPartialNotice();
     }
 
@@ -429,38 +454,16 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
 
   const upgradeWithFullBody = (data) => {
     if (requestId !== openRequestId || !data) return;
+    const isFull = shouldUpgradeBody(data, preview);
     renderArticleModal(data, articleId, {
       updateUrl: !preview && updateUrl,
-      showPartial: Boolean(data.partial),
+      showPartial: !isFull,
     });
   };
 
+  showFullBodyLoading();
+
   try {
-    if (IS_MOBILE) {
-      try {
-        const quickData = await fetchArticleBody(articleId, { quick: true });
-        upgradeWithFullBody(quickData);
-      } catch (error) {
-        if (!preview) {
-          const fallback = extractPreviewFromCard(articleId);
-          if (fallback) {
-            renderArticleModal(buildPreviewPayload(fallback), articleId, {
-              updateUrl,
-              showPartial: true,
-            });
-          }
-        }
-      }
-
-      fetchArticleBody(articleId)
-        .then((fullData) => {
-          if (requestId !== openRequestId || fullData.partial) return;
-          upgradeWithFullBody(fullData);
-        })
-        .catch(() => {});
-      return;
-    }
-
     const data = await fetchArticleBody(articleId);
     upgradeWithFullBody(data);
   } catch (error) {
@@ -479,6 +482,7 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
     alert("記事の取得に失敗しました。もう一度お試しください。");
   } finally {
     window.clearTimeout(loadingWatchdog);
+    hideFullBodyLoading();
     if (requestId === openRequestId && modalContent.hidden) {
       hideLoadingState();
     }

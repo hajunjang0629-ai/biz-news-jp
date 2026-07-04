@@ -177,7 +177,7 @@ def fetch_article_content(url: str) -> ArticleContent:
         response = httpx.get(
             url,
             follow_redirects=True,
-            timeout=8.0,
+            timeout=12.0,
             headers={"User-Agent": USER_AGENT},
         )
         response.raise_for_status()
@@ -188,6 +188,13 @@ def fetch_article_content(url: str) -> ArticleContent:
             include_tables=False,
             favor_precision=True,
         )
+        if not extracted or len(extracted.strip()) < 200:
+            extracted = trafilatura.extract(
+                html,
+                include_comments=False,
+                include_tables=False,
+                favor_recall=True,
+            )
         if extracted:
             body = clean_article_body(extracted.strip())
 

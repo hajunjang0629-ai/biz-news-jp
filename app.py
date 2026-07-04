@@ -20,7 +20,7 @@ from services.translator import translate_articles
 BASE_DIR = Path(__file__).resolve().parent
 SITE_NAME = "BizNews JP"
 SITE_DESCRIPTION = "世界中のビジネスニュースから、重要で興味深い記事だけを日本語でお届けします。"
-ARTICLE_BODY_TIMEOUT_SECONDS = 18
+ARTICLE_BODY_TIMEOUT_SECONDS = 26
 ARTICLE_LOOKUP_TIMEOUT_SECONDS = 8
 
 _news_cache: list[dict] | None = None
@@ -30,7 +30,13 @@ _news_cache_lock = threading.Lock()
 
 def _warm_news_cache() -> None:
     try:
-        get_translated_news()
+        articles = get_translated_news()
+        for article in articles[:3]:
+            threading.Thread(
+                target=build_full_article_payload,
+                args=(article,),
+                daemon=True,
+            ).start()
     except Exception:
         pass
 

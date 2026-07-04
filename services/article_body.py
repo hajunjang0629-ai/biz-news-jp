@@ -60,15 +60,18 @@ def build_full_article_payload(article: dict[str, Any]) -> dict[str, Any]:
         body_ja = article["summary_ja"]
         body_original = article["summary_original"]
 
+    summary_ja = article["summary_ja"]
+    has_full_body = bool(content.body) and len(body_ja.strip()) > len(summary_ja.strip()) + 60
+
     bullet_summary = summarize_to_bullets(body_ja)
     if not bullet_summary:
-        bullet_summary = summarize_to_bullets(article["summary_ja"])
+        bullet_summary = summarize_to_bullets(summary_ja)
 
     payload = {
         "id": article["id"],
         "title_ja": article["title_ja"],
         "title_original": article["title_original"],
-        "summary_ja": article["summary_ja"],
+        "summary_ja": summary_ja,
         "body_ja": body_ja,
         "body_original": body_original,
         "bullet_summary": bullet_summary,
@@ -76,7 +79,7 @@ def build_full_article_payload(article: dict[str, Any]) -> dict[str, Any]:
         "url": article["url"],
         "published_at": article["published_at"],
         "image_url": image_url,
-        "partial": not bool(content.body),
+        "partial": not has_full_body,
     }
 
     _body_cache[_cache_key(article["id"])] = (payload, now)
