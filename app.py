@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 from contextlib import asynccontextmanager
@@ -10,15 +11,16 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
-from services.content import clean_article_body, fetch_article_content, upgrade_image_url
+from services.article_body import build_fallback_article_payload, build_full_article_payload
 from services.news import fetch_interesting_business_news
-from services.summarizer import summarize_to_bullets
-from services.translator import translate_articles, translate_long_text
+from services.translator import translate_articles
 
 BASE_DIR = Path(__file__).resolve().parent
 SITE_NAME = "BizNews JP"
 SITE_DESCRIPTION = "世界中のビジネスニュースから、重要で興味深い記事だけを日本語でお届けします。"
+ARTICLE_BODY_TIMEOUT_SECONDS = 22
 
 _news_cache: list[dict] | None = None
 _articles_by_id: dict[str, dict] = {}
@@ -104,12 +106,17 @@ def get_cached_news() -> list[dict]:
 
 
 def get_article(article_id: str) -> dict:
+    article = _articles_by_id.get(article_id)
+    if article:
+        return article
+
     if not _articles_by_id:
         get_translated_news()
-    article = _articles_by_id.get(article_id)
-    if not article:
-        raise HTTPException(status_code=404, detail="記事が見つかりません")
-    return article
+        article = _articles_by_id.get(article_id)
+        if article:
+            return article
+
+    raise HTTPException(status_code=404, detail="記事が見つかりません")
 
 
 @app.get("/health")
@@ -148,35 +155,16 @@ async def api_news() -> JSONResponse:
 @app.get("/api/articles/{article_id}/body")
 async def article_body(article_id: str) -> JSONResponse:
     article = get_article(article_id)
-    content = fetch_article_content(article["url"])
 
-    image_url = content.image_url or article.get("image_url")
-    if image_url:
-        image_url = upgrade_image_url(image_url)
+    try:
+        payload = await asyncio.wait_for(
+            run_in_threadpool(build_full_article_payload, article),
+            timeout=ARTICLE_BODY_TIMEOUT_SECONDS,
+        )
+    except (asyncio.TimeoutError, Exception):
+        payload = build_fallback_article_payload(article)
 
-    body_original = clean_article_body(content.body or article["summary_original"])
-    body_ja = (
-        clean_article_body(translate_long_text(body_original))
-        if body_original
-        else article["summary_ja"]
-    )
-    bullet_summary = summarize_to_bullets(body_ja)
-
-    return JSONResponse(
-        {
-            "id": article["id"],
-            "title_ja": article["title_ja"],
-            "title_original": article["title_original"],
-            "summary_ja": article["summary_ja"],
-            "body_ja": body_ja,
-            "body_original": body_original,
-            "bullet_summary": bullet_summary,
-            "source": article["source"],
-            "url": article["url"],
-            "published_at": article["published_at"],
-            "image_url": image_url,
-        }
-    )
+    return JSONResponse(payload)
 
 
 @app.post("/api/refresh")

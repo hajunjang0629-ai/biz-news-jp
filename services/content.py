@@ -174,20 +174,26 @@ def fetch_article_content(url: str) -> ArticleContent:
     image_url: str | None = None
 
     try:
-        downloaded = trafilatura.fetch_url(url, no_ssl=False)
-        if downloaded:
-            extracted = trafilatura.extract(
-                downloaded,
-                include_comments=False,
-                include_tables=False,
-                favor_precision=True,
-            )
-            if extracted:
-                body = clean_article_body(extracted.strip())
+        response = httpx.get(
+            url,
+            follow_redirects=True,
+            timeout=8.0,
+            headers={"User-Agent": USER_AGENT},
+        )
+        response.raise_for_status()
+        html = response.text
+        extracted = trafilatura.extract(
+            html,
+            include_comments=False,
+            include_tables=False,
+            favor_precision=True,
+        )
+        if extracted:
+            body = clean_article_body(extracted.strip())
 
-            metadata = trafilatura.extract_metadata(downloaded)
-            if metadata and metadata.image:
-                image_url = upgrade_image_url(metadata.image)
+        metadata = trafilatura.extract_metadata(html)
+        if metadata and metadata.image:
+            image_url = upgrade_image_url(metadata.image)
     except Exception:
         pass
 

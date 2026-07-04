@@ -198,6 +198,39 @@ function closeModal({ updateUrl = true } = {}) {
   }
 }
 
+async function fetchArticleBody(articleId) {
+  const url = `/api/articles/${encodeURIComponent(articleId)}/body`;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      });
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      lastError = error;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 async function openArticle(articleId, { updateUrl = true } = {}) {
   openModal();
   modalLoading.hidden = false;
@@ -205,12 +238,7 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
   currentArticleId = articleId;
 
   try {
-    const response = await fetch(`/api/articles/${encodeURIComponent(articleId)}/body`);
-    if (!response.ok) {
-      throw new Error("failed");
-    }
-
-    const data = await response.json();
+    const data = await fetchArticleBody(articleId);
     let lineIndex = 0;
 
     setFadeElement(modalSource, lineIndex);
@@ -244,6 +272,13 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
     modalSourceLink.href = data.url;
     updateShareLinks(articleId, data.title_ja);
 
+    if (data.partial) {
+      modalBody.insertAdjacentHTML(
+        "afterbegin",
+        '<p class="partial-notice fade-line" style="--delay:0ms">通信状況により要約のみ表示しています。原文サイトで全文をご確認ください。</p>'
+      );
+    }
+
     if (updateUrl) {
       updateArticleUrl(articleId);
     }
@@ -256,8 +291,9 @@ async function openArticle(articleId, { updateUrl = true } = {}) {
   }
 }
 
-document.querySelectorAll("[data-article-id]").forEach((element) => {
-  element.addEventListener("click", () => {
+document.querySelectorAll(".clickable-card[data-article-id]").forEach((element) => {
+  element.addEventListener("click", (event) => {
+    if (event.defaultPrevented) return;
     openArticle(element.dataset.articleId);
   });
 

@@ -606,6 +606,15 @@ body.modal-open {
   margin: 0 0 16px;
 }
 
+.partial-notice {
+  margin-bottom: 18px !important;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(212, 168, 83, 0.12);
+  color: #ffe7b0;
+  font-size: 0.88rem;
+}
+
 .modal-body p:last-child {
   margin-bottom: 0;
 }
