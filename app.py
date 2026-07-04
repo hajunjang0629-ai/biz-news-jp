@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +20,30 @@ BASE_DIR = Path(__file__).resolve().parent
 SITE_NAME = "BizNews JP"
 SITE_DESCRIPTION = "世界中のビジネスニュースから、重要で興味深い記事だけを日本語でお届けします。"
 
-app = FastAPI(title=SITE_NAME, description="Interesting business news in Japanese")
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
-templates = Jinja2Templates(directory=BASE_DIR / "templates")
-
 _news_cache: list[dict] | None = None
 _articles_by_id: dict[str, dict] = {}
+
+
+def _warm_news_cache() -> None:
+    try:
+        get_translated_news()
+    except Exception:
+        pass
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    threading.Thread(target=_warm_news_cache, daemon=True).start()
+    yield
+
+
+app = FastAPI(
+    title=SITE_NAME,
+    description="Interesting business news in Japanese",
+    lifespan=lifespan,
+)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
 def get_base_url(request: Request) -> str:
@@ -79,6 +99,10 @@ def get_translated_news() -> list[dict]:
     return translated
 
 
+def get_cached_news() -> list[dict]:
+    return _news_cache or []
+
+
 def get_article(article_id: str) -> dict:
     if not _articles_by_id:
         get_translated_news()
@@ -88,17 +112,24 @@ def get_article(article_id: str) -> dict:
     return article
 
 
+@app.get("/health")
+async def health() -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    articles = get_translated_news()
+    articles = get_cached_news()
     context = build_page_context(request, articles)
     return templates.TemplateResponse("index.html", context)
 
 
 @app.get("/article/{article_id}", response_class=HTMLResponse)
 async def article_page(request: Request, article_id: str) -> HTMLResponse:
-    articles = get_translated_news()
+    if not _articles_by_id:
+        get_translated_news()
     share_article = get_article(article_id)
+    articles = get_cached_news()
     context = build_page_context(
         request,
         articles,
@@ -110,7 +141,7 @@ async def article_page(request: Request, article_id: str) -> HTMLResponse:
 
 @app.get("/api/news")
 async def api_news() -> JSONResponse:
-    articles = get_translated_news()
+    articles = get_translated_news() if not _news_cache else get_cached_news()
     return JSONResponse({"count": len(articles), "articles": articles})
 
 

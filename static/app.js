@@ -315,6 +315,28 @@ if (appConfig.openArticleId) {
   openArticle(appConfig.openArticleId, { updateUrl: false });
 }
 
+async function waitForNews() {
+  const articleCount = Number(document.getElementById("article-count")?.textContent || "0");
+  if (articleCount > 0) return;
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    try {
+      const response = await fetch("/api/news");
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data.count > 0) {
+        window.location.reload();
+        return;
+      }
+    } catch (error) {
+      // keep polling while cache warms in background
+    }
+  }
+}
+
+waitForNews();
+
 refreshBtn?.addEventListener("click", async () => {
   refreshBtn.disabled = true;
   refreshBtn.textContent = "更新中...";
