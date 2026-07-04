@@ -7,8 +7,26 @@ const shareLineBtn = document.getElementById("share-line-btn");
 const shareUrlEl = document.getElementById("share-url");
 const appConfig = window.APP_CONFIG || { baseUrl: window.location.origin, openArticleId: null, openArticle: null };
 
+const IS_MOBILE = window.matchMedia("(max-width: 768px), (hover: none) and (pointer: coarse)").matches;
+const USE_ANIMATIONS = !IS_MOBILE && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const LINE_DELAY_MS = USE_ANIMATIONS ? 65 : 0;
+const FETCH_TIMEOUT_MS = IS_MOBILE ? 12000 : 28000;
+const FETCH_RETRIES = IS_MOBILE ? 1 : 2;
+const LOADING_MAX_MS = IS_MOBILE ? 1200 : 2500;
+
 let currentArticleId = null;
 let currentShareTitle = "";
+let openRequestId = 0;
+
+const articlePreviews = (() => {
+  const node = document.getElementById("article-previews-data");
+  if (!node) return {};
+  try {
+    return JSON.parse(node.textContent || "{}");
+  } catch (error) {
+    return {};
+  }
+})();
 const modal = document.getElementById("article-modal");
 const modalLoading = document.getElementById("modal-loading");
 const modalContent = document.getElementById("modal-content");
@@ -56,6 +74,49 @@ function buildPreviewPayload(preview) {
     image_url: preview.image_url || null,
     partial: true,
   };
+}
+
+function extractPreviewFromCard(articleId) {
+  const card = document.querySelector(`.clickable-card[data-article-id="${articleId}"]`);
+  if (!card) return null;
+
+  return {
+    id: articleId,
+    title_ja: card.querySelector("h3")?.textContent?.trim() || "",
+    summary_ja: card.querySelector(".card-summary")?.textContent?.trim() || "",
+    title_original: "",
+    summary_original: "",
+    source: card.querySelector(".source")?.textContent?.trim() || "",
+    url: "",
+    published_at: card.querySelector("time")?.getAttribute("datetime") || "",
+    image_url: card.querySelector(".card-image img")?.getAttribute("src") || null,
+  };
+}
+
+function resolvePreview(articleId, rawPreview = null) {
+  const parsed = parseArticlePreview(rawPreview);
+  if (parsed?.id === articleId) return parsed;
+
+  if (articlePreviews[articleId]) return articlePreviews[articleId];
+
+  const openArticle = parseArticlePreview(appConfig.openArticle);
+  if (openArticle?.id === articleId) return openArticle;
+
+  return extractPreviewFromCard(articleId);
+}
+
+function showLoadingState(message) {
+  modalLoading.hidden = false;
+  modalContent.hidden = true;
+  const loadingText = modalLoading.querySelector("p");
+  if (loadingText && message) {
+    loadingText.textContent = message;
+  }
+}
+
+function hideLoadingState() {
+  modalLoading.hidden = true;
+  modalContent.hidden = false;
 }
 
 function showPartialNotice() {
@@ -152,8 +213,6 @@ chips.forEach((chip) => {
   });
 });
 
-const LINE_DELAY_MS = 65;
-
 function escapeHtml(text) {
   return text
     .replace(/&/g, "&amp;")
@@ -177,12 +236,19 @@ function fadeLineHtml(content, index) {
 }
 
 function formatBody(text, startIndex = 0) {
+  if (!USE_ANIMATIONS) {
+    return splitIntoLines(text)
+      .map((line) => `<p>${escapeHtml(line)}</p>`)
+      .join("");
+  }
+
   return splitIntoLines(text)
     .map((line, offset) => fadeLineHtml(escapeHtml(line), startIndex + offset))
     .join("");
 }
 
 function setFadeElement(element, delayMs = 0) {
+  if (!USE_ANIMATIONS || !element) return;
   element.classList.add("fade-line");
   element.style.setProperty("--delay", `${delayMs}ms`);
 }
@@ -208,6 +274,9 @@ function renderBullets(bullets, startIndex = 0) {
 
   modalBullets.innerHTML = bullets
     .map((item, offset) => {
+      if (!USE_ANIMATIONS) {
+        return `<li>${escapeHtml(item)}</li>`;
+      }
       const index = startIndex + 1 + offset;
       return `<li class="fade-line" style="--delay:${index * LINE_DELAY_MS}ms">${escapeHtml(item)}</li>`;
     })
@@ -234,6 +303,12 @@ function closeModal({ updateUrl = true } = {}) {
   modalImageWrap.style.removeProperty("--delay");
   currentArticleId = null;
   currentShareTitle = "";
+  openRequestId += 1;
+
+  const loadingText = modalLoading.querySelector("p");
+  if (loadingText) {
+    loadingText.textContent = "記事を取得して日本語に翻訳しています...";
+  }
 
   if (updateUrl && window.location.pathname.startsWith("/article/")) {
     updateArticleUrl(null);
@@ -243,11 +318,12 @@ function closeModal({ updateUrl = true } = {}) {
 async function fetchArticleBody(articleId, { quick = false } = {}) {
   const query = quick ? "?quick=1" : "";
   const url = `/api/articles/${encodeURIComponent(articleId)}/body${query}`;
+  const timeoutMs = quick && IS_MOBILE ? 8000 : FETCH_TIMEOUT_MS;
   let lastError = null;
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < FETCH_RETRIES; attempt += 1) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), quick ? 15000 : 45000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -265,8 +341,8 @@ async function fetchArticleBody(articleId, { quick = false } = {}) {
     } catch (error) {
       clearTimeout(timeoutId);
       lastError = error;
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
+      if (attempt < FETCH_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 800));
       }
     }
   }
@@ -275,95 +351,189 @@ async function fetchArticleBody(articleId, { quick = false } = {}) {
 }
 
 function renderArticleModal(data, articleId, { updateUrl = true, showPartial = false } = {}) {
-  let lineIndex = 0;
+  try {
+    let lineIndex = 0;
 
-  setFadeElement(modalSource, lineIndex);
-  setFadeElement(modalDate, lineIndex);
-  modalSource.textContent = data.source || "";
-  modalDate.textContent = formatPublishedDate(data.published_at);
-  lineIndex += 1;
-
-  if (data.image_url) {
-    modalImage.src = data.image_url;
-    modalImageWrap.hidden = false;
-    setFadeElement(modalImageWrap, lineIndex);
+    setFadeElement(modalSource, lineIndex);
+    setFadeElement(modalDate, lineIndex);
+    modalSource.textContent = data.source || "";
+    modalDate.textContent = formatPublishedDate(data.published_at);
     lineIndex += 1;
-  } else {
-    modalImage.removeAttribute("src");
-    modalImageWrap.hidden = true;
+
+    if (data.image_url) {
+      modalImage.src = data.image_url;
+      modalImageWrap.hidden = false;
+      setFadeElement(modalImageWrap, lineIndex);
+      lineIndex += 1;
+    } else {
+      modalImage.removeAttribute("src");
+      modalImageWrap.hidden = true;
+    }
+
+    modalTitle.textContent = data.title_ja || "";
+    currentShareTitle = data.title_ja || "";
+    setFadeElement(modalTitle, lineIndex);
+    lineIndex += 1;
+
+    lineIndex = renderBullets(data.bullet_summary, lineIndex);
+
+    const bodyText = data.body_ja || data.summary_ja || "";
+    modalBody.innerHTML = formatBody(bodyText, lineIndex);
+
+    modalTitleOriginal.textContent = data.title_original || "";
+    modalBodyOriginal.innerHTML = formatBody(data.body_original || "", lineIndex);
+    modalSourceLink.href = data.url || "#";
+    updateShareLinks(articleId, data.title_ja || "");
+
+    if (showPartial || data.partial) {
+      showPartialNotice();
+    }
+
+    if (updateUrl) {
+      updateArticleUrl(articleId);
+    }
+  } finally {
+    hideLoadingState();
   }
-
-  modalTitle.textContent = data.title_ja || "";
-  currentShareTitle = data.title_ja || "";
-  setFadeElement(modalTitle, lineIndex);
-  lineIndex += 1;
-
-  lineIndex = renderBullets(data.bullet_summary, lineIndex);
-
-  const bodyText = data.body_ja || data.summary_ja || "";
-  modalBody.innerHTML = formatBody(bodyText, lineIndex);
-  lineIndex += splitIntoLines(bodyText).length;
-
-  modalTitleOriginal.textContent = data.title_original || "";
-  modalBodyOriginal.innerHTML = formatBody(data.body_original || "", lineIndex);
-  modalSourceLink.href = data.url || "#";
-  updateShareLinks(articleId, data.title_ja || "");
-
-  if (showPartial || data.partial) {
-    showPartialNotice();
-  }
-
-  if (updateUrl) {
-    updateArticleUrl(articleId);
-  }
-
-  modalLoading.hidden = true;
-  modalContent.hidden = false;
 }
 
-async function openArticle(articleId, { updateUrl = true, preview = null } = {}) {
-  openModal();
-  modalLoading.hidden = false;
-  modalContent.hidden = true;
+async function openArticle(articleId, { updateUrl = true } = {}) {
+  const requestId = ++openRequestId;
   currentArticleId = articleId;
 
-  const previewData = parseArticlePreview(preview) || parseArticlePreview(appConfig.openArticle);
-  const hasPreview = Boolean(previewData && previewData.id === articleId);
+  openModal();
+  showLoadingState(
+    IS_MOBILE ? "記事を読み込んでいます..." : "記事を取得して日本語に翻訳しています..."
+  );
 
-  if (hasPreview) {
-    renderArticleModal(buildPreviewPayload(previewData), articleId, { updateUrl, showPartial: true });
+  const preview = resolvePreview(articleId);
+  if (preview?.title_ja || preview?.summary_ja) {
+    renderArticleModal(buildPreviewPayload(preview), articleId, {
+      updateUrl,
+      showPartial: true,
+    });
   }
 
-  try {
-    const data = await fetchArticleBody(articleId);
+  const loadingWatchdog = window.setTimeout(() => {
+    if (requestId !== openRequestId) return;
+    if (modalLoading.hidden) return;
+
+    const fallback = preview || extractPreviewFromCard(articleId);
+    if (fallback) {
+      renderArticleModal(buildPreviewPayload(fallback), articleId, {
+        updateUrl,
+        showPartial: true,
+      });
+    }
+  }, LOADING_MAX_MS);
+
+  const upgradeWithFullBody = (data) => {
+    if (requestId !== openRequestId || !data) return;
     renderArticleModal(data, articleId, {
-      updateUrl: !hasPreview && updateUrl,
+      updateUrl: !preview && updateUrl,
       showPartial: Boolean(data.partial),
     });
+  };
+
+  try {
+    if (IS_MOBILE) {
+      try {
+        const quickData = await fetchArticleBody(articleId, { quick: true });
+        upgradeWithFullBody(quickData);
+      } catch (error) {
+        if (!preview) {
+          const fallback = extractPreviewFromCard(articleId);
+          if (fallback) {
+            renderArticleModal(buildPreviewPayload(fallback), articleId, {
+              updateUrl,
+              showPartial: true,
+            });
+          }
+        }
+      }
+
+      fetchArticleBody(articleId)
+        .then((fullData) => {
+          if (requestId !== openRequestId || fullData.partial) return;
+          upgradeWithFullBody(fullData);
+        })
+        .catch(() => {});
+      return;
+    }
+
+    const data = await fetchArticleBody(articleId);
+    upgradeWithFullBody(data);
   } catch (error) {
-    if (hasPreview) {
-      showPartialNotice();
+    if (requestId !== openRequestId) return;
+
+    const fallback = preview || extractPreviewFromCard(articleId);
+    if (fallback) {
+      renderArticleModal(buildPreviewPayload(fallback), articleId, {
+        updateUrl,
+        showPartial: true,
+      });
       return;
     }
 
     closeModal({ updateUrl: false });
     alert("記事の取得に失敗しました。もう一度お試しください。");
+  } finally {
+    window.clearTimeout(loadingWatchdog);
+    if (requestId === openRequestId && modalContent.hidden) {
+      hideLoadingState();
+    }
   }
 }
 
-document.querySelectorAll(".clickable-card[data-article-id]").forEach((element) => {
+function bindArticleCard(element) {
+  const articleId = element.dataset.articleId;
+  if (!articleId) return;
+
+  let touchMoved = false;
+  let lastTouchAt = 0;
+
+  element.addEventListener(
+    "touchstart",
+    () => {
+      touchMoved = false;
+    },
+    { passive: true }
+  );
+
+  element.addEventListener(
+    "touchmove",
+    () => {
+      touchMoved = true;
+    },
+    { passive: true }
+  );
+
+  element.addEventListener(
+    "touchend",
+    (event) => {
+      if (touchMoved) return;
+      event.preventDefault();
+      lastTouchAt = Date.now();
+      openArticle(articleId);
+    },
+    { passive: false }
+  );
+
   element.addEventListener("click", (event) => {
+    if (Date.now() - lastTouchAt < 400) return;
     if (event.defaultPrevented) return;
-    openArticle(element.dataset.articleId, { preview: element.dataset.article });
+    openArticle(articleId);
   });
 
   element.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      openArticle(element.dataset.articleId, { preview: element.dataset.article });
+      openArticle(articleId);
     }
   });
-});
+}
+
+document.querySelectorAll(".clickable-card[data-article-id]").forEach(bindArticleCard);
 
 document.querySelectorAll("[data-close-modal]").forEach((element) => {
   element.addEventListener("click", () => closeModal());
@@ -378,11 +548,7 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("popstate", (event) => {
   const articleId = event.state?.articleId;
   if (articleId) {
-    const card = document.querySelector(`.clickable-card[data-article-id="${articleId}"]`);
-    openArticle(articleId, {
-      updateUrl: false,
-      preview: card?.dataset.article || null,
-    });
+    openArticle(articleId, { updateUrl: false });
     return;
   }
 
@@ -412,10 +578,7 @@ shareCopyBtn?.addEventListener("click", async () => {
 });
 
 if (appConfig.openArticleId) {
-  openArticle(appConfig.openArticleId, {
-    updateUrl: false,
-    preview: appConfig.openArticle,
-  });
+  openArticle(appConfig.openArticleId, { updateUrl: false });
 }
 
 async function waitForNews() {

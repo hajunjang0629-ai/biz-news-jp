@@ -507,6 +507,24 @@ body.modal-open {
   animation-delay: var(--delay, 0ms);
 }
 
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+  .fade-line {
+    opacity: 1;
+    animation: none;
+    transform: none;
+  }
+
+  .modal-panel {
+    max-height: 92dvh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .modal-loading {
+    min-height: 160px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fade-line {
     opacity: 1;

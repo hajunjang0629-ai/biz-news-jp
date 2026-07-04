@@ -93,6 +93,12 @@ def build_page_context(
         og_image = f"{base_url}/static/og-default.svg"
         page_title = f"{SITE_NAME} — 厳選ビジネスニュース"
 
+    article_previews = {
+        article["id"]: article_preview_payload(article) for article in articles
+    }
+    if share_article:
+        article_previews[share_article["id"]] = article_preview_payload(share_article)
+
     return {
         "request": request,
         "articles": articles,
@@ -107,6 +113,7 @@ def build_page_context(
         "open_article_id": open_article_id,
         "open_article": article_preview_payload(share_article) if share_article else None,
         "article_preview": article_preview_payload,
+        "article_previews": article_previews,
     }
 
 
@@ -195,12 +202,15 @@ async def api_news() -> JSONResponse:
 
 @app.get("/api/articles/{article_id}/body")
 async def article_body(article_id: str, quick: bool = False) -> JSONResponse:
+    if quick:
+        article = _articles_by_id.get(article_id)
+        if not article:
+            raise HTTPException(status_code=404, detail="記事が見つかりません")
+        return JSONResponse(build_fallback_article_payload(article))
+
     article = await resolve_article(article_id)
     if not article:
         raise HTTPException(status_code=404, detail="記事が見つかりません")
-
-    if quick:
-        return JSONResponse(build_fallback_article_payload(article))
 
     try:
         payload = await asyncio.wait_for(

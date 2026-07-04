@@ -84,7 +84,6 @@
       <article
         class="news-card clickable-card"
         data-article-id="{{ article.id }}"
-        data-article='{{ article_preview(article) | tojson }}'
         data-tags="{{ article.interest_tags_ja | join(' ') }} {{ article.interest_tags | join(' ') }}"
         tabindex="0"
         role="button"
@@ -191,6 +190,7 @@
     </div>
   </footer>
 
+  <script type="application/json" id="article-previews-data">{{ article_previews | tojson }}</script>
   <script>
     window.APP_CONFIG = {
       baseUrl: {{ base_url | tojson }},
@@ -198,6 +198,6 @@
       openArticle: {{ open_article | tojson }}
     };
   </script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>
