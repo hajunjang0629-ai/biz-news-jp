@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ page_title }}</title>
+  <meta name="description" content="{{ og_description }}">
+  <meta property="og:type" content="{% if open_article_id %}article{% else %}website{% endif %}">
+  <meta property="og:site_name" content="{{ site_name }}">
+  <meta property="og:title" content="{{ og_title }}">
+  <meta property="og:description" content="{{ og_description }}">
+  <meta property="og:url" content="{{ og_url }}">
+  <meta property="og:image" content="{{ og_image }}">
+  <meta property="og:locale" content="ja_JP">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ og_title }}">
+  <meta name="twitter:description" content="{{ og_description }}">
+  <meta name="twitter:image" content="{{ og_image }}">
+  <link rel="canonical" href="{{ og_url }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Playfair+Display:wght@700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="page-bg"></div>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="brand-mark">BN</span>
+        <div>
+          <h1 class="brand-title">BizNews JP</h1>
+          <p class="brand-subtitle">厳選ビジネスニュース · 日本語翻訳</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="share-site-btn" class="btn-share" type="button" data-share-kind="site">サイトを共有</button>
+        <span class="live-badge">LIVE</span>
+        <button id="refresh-btn" class="btn-refresh" type="button">更新</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Curated for decision makers</p>
+        <h2>本当に読む価値のある<br>ビジネスニュースだけ。</h2>
+        <p class="hero-text">
+          M&A、IPO、AI、規制、大型投資など、ビジネスへの影響が大きい記事だけを自動選別し、すべて日本語に翻訳して表示します。記事をクリックすると、要点まとめと翻訳された本文が読めます。
+        </p>
+      </div>
+      <div class="hero-stats">
+        <div class="stat-card">
+          <span class="stat-value" id="article-count">{{ article_count }}</span>
+          <span class="stat-label">厳選記事</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value">5</span>
+          <span class="stat-label">情報源</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value">JA</span>
+          <span class="stat-label">自動翻訳</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="filters">
+      <p class="filters-label">注目トピック</p>
+      <div class="chip-row" id="topic-chips">
+        <button class="chip active" data-filter="all">すべて</button>
+        <button class="chip" data-filter="ai">AI</button>
+        <button class="chip" data-filter="m&a">M&A</button>
+        <button class="chip" data-filter="ipo">IPO</button>
+        <button class="chip" data-filter="regulation">規制</button>
+        <button class="chip" data-filter="markets">マーケット</button>
+      </div>
+    </section>
+
+    <section class="news-grid" id="news-grid">
+      {% for article in articles %}
+      <article
+        class="news-card clickable-card"
+        data-article-id="{{ article.id }}"
+        data-tags="{{ article.interest_tags_ja | join(' ') }} {{ article.interest_tags | join(' ') }}"
+        tabindex="0"
+        role="button"
+        aria-label="{{ article.title_ja }} を読む"
+      >
+        <div class="card-top">
+          <span class="source">{{ article.source }}</span>
+          <span class="score">注目度 {{ article.interest_score }}</span>
+        </div>
+
+        {% if article.image_url %}
+        <div class="card-image">
+          <img
+            src="{{ article.image_url }}"
+            alt=""
+            loading="lazy"
+            decoding="async"
+            fetchpriority="{% if loop.index <= 3 %}high{% else %}auto{% endif %}"
+          >
+        </div>
+        {% endif %}
+
+        <div class="card-body">
+          <time datetime="{{ article.published_at }}">{{ article.published_at[:10] }}</time>
+          <h3>{{ article.title_ja }}</h3>
+          <p class="card-summary">{{ article.summary_ja }}</p>
+
+          {% if article.interest_tags_ja %}
+          <div class="tag-row">
+            {% for tag in article.interest_tags_ja %}
+            <span class="tag">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+
+          <p class="read-hint">クリックして日本語全文を読む</p>
+        </div>
+      </article>
+      {% else %}
+      <div class="empty-state">
+        <h3>記事が見つかりませんでした</h3>
+        <p>フィードの取得または翻訳に問題がある可能性があります。更新ボタンを押してください。</p>
+      </div>
+      {% endfor %}
+    </section>
+  </main>
+
+  <div class="article-modal" id="article-modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <button class="modal-close" type="button" data-close-modal aria-label="閉じる">×</button>
+
+      <div class="modal-loading" id="modal-loading">
+        <div class="spinner"></div>
+        <p>記事を取得して日本語に翻訳しています...</p>
+      </div>
+
+      <article class="modal-content" id="modal-content" hidden>
+        <div class="modal-image-wrap" id="modal-image-wrap" hidden>
+          <img id="modal-image" alt="">
+        </div>
+        <div class="modal-meta">
+          <span id="modal-source"></span>
+          <time id="modal-date"></time>
+        </div>
+        <h2 id="modal-title"></h2>
+
+        <div class="modal-layout">
+          <div class="modal-main">
+            <div class="modal-body" id="modal-body"></div>
+            <details class="original-text modal-original">
+              <summary>原文を表示</summary>
+              <p id="modal-title-original"></p>
+              <div id="modal-body-original"></div>
+            </details>
+            <a class="modal-source-link" id="modal-source-link" href="#" target="_blank" rel="noopener noreferrer">
+              原文サイトで読む →
+            </a>
+
+            <div class="share-panel" id="modal-share-panel">
+              <p class="share-label">この記事を共有</p>
+              <div class="share-actions">
+                <button class="btn-share" type="button" id="share-copy-btn">リンクをコピー</button>
+                <a class="btn-share btn-share-link" id="share-x-btn" href="#" target="_blank" rel="noopener noreferrer">X</a>
+                <a class="btn-share btn-share-link" id="share-line-btn" href="#" target="_blank" rel="noopener noreferrer">LINE</a>
+              </div>
+              <p class="share-url" id="share-url"></p>
+            </div>
+          </div>
+
+          <aside class="modal-bullets" id="modal-bullets-panel" hidden>
+            <p class="bullets-label">要点まとめ</p>
+            <ul id="modal-bullets"></ul>
+          </aside>
+        </div>
+      </article>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>BizNews JP — ビジネスニュースを厳選し、日本語で提供します。</p>
+      <p class="footer-note">記事は BBC、CNBC、Bloomberg、Reuters、NPR などの公開RSSから取得しています。</p>
+    </div>
+  </footer>
+
+  <script>
+    window.APP_CONFIG = {
+      baseUrl: {{ base_url | tojson }},
+      openArticleId: {{ open_article_id | tojson }}
+    };
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
